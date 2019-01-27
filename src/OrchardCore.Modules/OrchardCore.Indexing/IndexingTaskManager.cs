@@ -100,18 +100,31 @@ namespace OrchardCore.Indexing.Services
                         contentItemIds.Add(task.ContentItemId);
                     }
                 }
+                var pageSize = 500;
+                var pages = localQueue.Count / pageSize;
+                if (localQueue.Count / pageSize != 0)
+                {
+                    pages++;
+                }
 
-                // At this point, content items ids should be unique in _taskQueue
-                var ids = localQueue.Select(x => x.ContentItemId).ToArray();
-                var table = $"{_tablePrefix}{nameof(IndexingTask)}";
+                for (var i = 0; i < pages; i++)
+                {
+                    // At this point, content items ids should be unique in _taskQueue
+                    var ids = localQueue
+                        .Skip(i*pageSize)
+                        .Take(pageSize)
+                        .Select(x => x.ContentItemId).ToArray();
+                    
+                    var table = $"{_tablePrefix}{nameof(IndexingTask)}";
 
-                var deleteCmd = $"delete from {dialect.QuoteForTableName(table)} where {dialect.QuoteForColumnName("ContentItemId")} {dialect.InOperator("@Ids")};";
-                await transaction.Connection.ExecuteAsync(deleteCmd, new { Ids = ids }, transaction);
+                    var deleteCmd = $"delete from {dialect.QuoteForTableName(table)} where {dialect.QuoteForColumnName("ContentItemId")} {dialect.InOperator("@Ids")};";
+                    await transaction.Connection.ExecuteAsync(deleteCmd, new { Ids = ids }, transaction);
 
-                var insertCmd = $"insert into {dialect.QuoteForTableName(table)} ({dialect.QuoteForColumnName("CreatedUtc")}, {dialect.QuoteForColumnName("ContentItemId")}, {dialect.QuoteForColumnName("Type")}) values (@CreatedUtc, @ContentItemId, @Type);";
-                await transaction.Connection.ExecuteAsync(insertCmd, _tasksQueue, transaction);
+                    var insertCmd = $"insert into {dialect.QuoteForTableName(table)} ({dialect.QuoteForColumnName("CreatedUtc")}, {dialect.QuoteForColumnName("ContentItemId")}, {dialect.QuoteForColumnName("Type")}) values (@CreatedUtc, @ContentItemId, @Type);";
+                    await transaction.Connection.ExecuteAsync(insertCmd, _tasksQueue, transaction);
+                }
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 _session.Cancel();
                 Logger.LogError("An error occured while updating indexing tasks", e);
