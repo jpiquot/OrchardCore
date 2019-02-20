@@ -22,31 +22,34 @@ namespace OrchardCore.Setup.Services
 {
     public class SetupService : ISetupService
     {
-        private readonly IShellHost _orchardHost;
+        private readonly IShellHost _shellHost;
         private readonly IShellContextFactory _shellContextFactory;
         private readonly IEnumerable<IRecipeHarvester> _recipeHarvesters;
         private readonly ILogger _logger;
         private readonly IStringLocalizer T;
-
+        private readonly IApplicationLifetime _applicationLifetime;
         private readonly string _applicationName;
         private IEnumerable<RecipeDescriptor> _recipes;
 
         public SetupService(
-            IShellHost orchardHost,
+            IShellHost shellHost,
             IHostingEnvironment hostingEnvironment,
             IShellContextFactory shellContextFactory,
             IRunningShellTable runningShellTable,
             IEnumerable<IRecipeHarvester> recipeHarvesters,
             ILogger<SetupService> logger,
-            IStringLocalizer<SetupService> stringLocalizer
+            IStringLocalizerFactory stringLocalizerFactory,
+            IStringLocalizer<SetupService> stringLocalizer,
+            IApplicationLifetime applicationLifetime
             )
         {
-            _orchardHost = orchardHost;
+            _shellHost = shellHost;
             _applicationName = hostingEnvironment.ApplicationName;
             _shellContextFactory = shellContextFactory;
             _recipeHarvesters = recipeHarvesters;
             _logger = logger;
             T = stringLocalizer;
+            _applicationLifetime = applicationLifetime;
         }
 
         public async Task<IEnumerable<RecipeDescriptor>> GetSetupRecipesAsync()
@@ -137,7 +140,6 @@ namespace OrchardCore.Setup.Services
                     try
                     {
                         store = scope.ServiceProvider.GetRequiredService<IStore>();
-                        await store.InitializeAsync();
                     }
                     catch (Exception e)
                     {
@@ -172,32 +174,23 @@ namespace OrchardCore.Setup.Services
 
                 executionId = Guid.NewGuid().ToString("n");
 
-                // Create a new scope for the recipe thread to prevent race issues with other scoped
-                // services from the request.
-                using (var scope = shellContext.CreateScope())
-                {
-                    var recipeExecutor = scope.ServiceProvider.GetService<IRecipeExecutor>();
+                var recipeExecutor = shellContext.ServiceProvider.GetRequiredService<IRecipeExecutor>();
 
-                    // Right now we run the recipe in the same thread, later use polling from the setup screen
-                    // to query the current execution.
-                    //await Task.Run(async () =>
-                    //{
-                    await recipeExecutor.ExecuteAsync(executionId, context.Recipe, new
-                    {
-                        SiteName = context.SiteName,
-                        AdminUsername = context.AdminUsername,
-                        AdminEmail = context.AdminEmail,
-                        AdminPassword = context.AdminPassword,
-                        DatabaseProvider = context.DatabaseProvider,
-                        DatabaseConnectionString = context.DatabaseConnectionString,
-                        DatabaseTablePrefix = context.DatabaseTablePrefix
-                    });
-                    //});
-                }
+                await recipeExecutor.ExecuteAsync(executionId, context.Recipe, new
+                {
+                    SiteName = context.SiteName,
+                    AdminUsername = context.AdminUsername,
+                    AdminEmail = context.AdminEmail,
+                    AdminPassword = context.AdminPassword,
+                    DatabaseProvider = context.DatabaseProvider,
+                    DatabaseConnectionString = context.DatabaseConnectionString,
+                    DatabaseTablePrefix = context.DatabaseTablePrefix
+                },
+                _applicationLifetime.ApplicationStopping);
             }
 
             // Reloading the shell context as the recipe  has probably updated its features
-            using (var shellContext = await _orchardHost.CreateShellContextAsync(shellSettings))
+            using (var shellContext = await _shellHost.CreateShellContextAsync(shellSettings))
             {
                 using (var scope = shellContext.CreateScope())
                 {
@@ -242,7 +235,7 @@ namespace OrchardCore.Setup.Services
 
             // Update the shell state
             shellSettings.State = TenantState.Running;
-            await _orchardHost.UpdateShellSettingsAsync(shellSettings);
+            await _shellHost.UpdateShellSettingsAsync(shellSettings);
 
             return executionId;
         }
